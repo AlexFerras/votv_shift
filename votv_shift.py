@@ -1,40 +1,45 @@
-VERSION = (0, 0, 1)
+VERSION = (0, 0, 5)
 
 
 import cgi
 import urllib
 import urllib.request
-ACTUAL_LINK = 'https://www.dropbox.com/scl/fi/mx8nsvgpd8g0r71zz1lwm?dl=1'
-response = urllib.request.urlopen(ACTUAL_LINK)
-_, params = cgi.parse_header(response.headers.get('Content-Disposition', ''))
-filename = params['filename']
-import re
-PATTERN = r'\d+.\d+.\d+'
-NEW_VERSION = tuple([int(i) for i in re.search(PATTERN, filename).group(0).split('.')])
-
+verline = urllib.request.urlopen('https://alexferras.github.io/votv.txt').read()
+NEW_VERSION = tuple([int(i) for i in verline.decode().split('.')])
 if VERSION < NEW_VERSION:
     print('need update')
+    import os
+    os.system('start updater -f -r')
+    import sys
+    sys.exit()
 
+import sys
+sys.stderr = open("errors.txt", "w")
 
 
 import pythonnet
 pythonnet.load("coreclr")
 import clr
 import os
+
 import sys
 import struct
 import zipfile
 import shutil
 
 from json import loads
+if os.path.exists('updater.bak'):
+    os.replace('updater.bak', 'updater.exe')
+
 with open('secrets.json') as f:
-    SECRETS = loads(f)
+    SECRETS = loads(f.read())
 
 os.environ['GIT_PYTHON_REFRESH'] = 'q'
 os.environ['GIT_PYTHON_GIT_EXECUTABLE'] = os.path.join(os.getcwd(), 'mingit', 'cmd', 'git.exe')
 print(os.getenv('GIT_PYTHON_GIT_EXECUTABLE'))
 import git
-git.refresh(os.path.join(os.getcwd(), 'mingit', 'cmd', 'git.exe'))
+GIT_PATH = os.path.join(os.getcwd(), 'mingit', 'cmd', 'git.exe')
+git.refresh(GIT_PATH)
 GIT_STAGING = os.path.join(os.getcwd(), 'git_staging')
 VOTV = os.path.join(os.getenv('LOCALAPPDATA'), 'VotV')
 REPO_URL = SECRETS['github_login']
@@ -42,7 +47,7 @@ REPO_URL = SECRETS['github_login']
 
 
 
-asm_path = r'E:\\Projects\\VoicesOfTheVoid\\PythonUI\\CS'
+asm_path = r'CS'
 sys.path.append(asm_path)
 clr.AddReference('Memory')
 from Memory import Mem
@@ -125,7 +130,42 @@ def copy_to_directory(src:str, dist:str, bad_folders:str):
 def copy_to_gitstaging():
     copy_to_directory(VOTV, GIT_STAGING, test_bad_folders)
 
+BACKUPS = os.path.join(VOTV, 'Saved', 'backups')
+def backups_count_file(filename:str) -> int:
+    count = 0
+    for f in os.listdir(BACKUPS):
+        if f[:-2] == filename:
+            count += 1
+
+    return count
+
+
+def delete_oldest_backup():
+    def key(v:str):
+        return os.path.getmtime(v)
+
+    files = [os.path.join(BACKUPS, f) for f in os.listdir(BACKUPS)]
+    files.sort(reverse=True, key=key)
+    os.remove(files[0])
+    
+        
+
+
 def copy_to_savefolder():
+    os.makedirs(BACKUPS,exist_ok=True)
+    saves = os.path.join(VOTV, 'Saved', 'SaveGames')
+    for s in os.listdir(saves):
+        if os.path.isdir(os.path.join(saves, s)):
+            continue
+
+        c = backups_count_file(s)
+        #if c > 5:
+            #delete_oldest_backup()
+
+        f_name = f'{s}-{c}'
+        f_path = os.path.join(BACKUPS, f_name)
+        shutil.copy2(os.path.join(saves, s), f_path)
+
     copy_to_directory(GIT_STAGING, VOTV, test_bad_folders)
 
         
@@ -133,11 +173,12 @@ def copy_to_savefolder():
 test_bad_folders = """Saved/BugIt
 Saved/Config
 Saved/Logs
+Saved/backups
 Saved/webcache
 saved.zip
 .git
 """
-zip_save(test_bad_folders)
+#zip_save(test_bad_folders)
 
 class DiscordAPI(discord.Client):
     @staticmethod
@@ -205,53 +246,79 @@ def file_in_repo(filePath):
             return True
     return False
 
+def resolve_repo():
+    global repo
+    os.makedirs(GIT_STAGING, exist_ok=True)
+    import git.cmd
+    os.system(f'{GIT_PATH} config --global http.schannelCheckRevoke false')
+    os.system(f'{GIT_PATH} config --global http.sslBackend "openssl')
+    os.system(f'{GIT_PATH} config --global http.sslCAInfo {os.path.join(os.getcwd(), 'git_fuckery', 'cacert-2025-07-15.pem')}')
+    try:
+        if len(os.listdir(GIT_STAGING)) == 0:
+            #repo = git.Repo.init('git_staging')
+            #repo.create_remote('origin', REPO_URL)
+            #repo.config_writer().set_value('http', 'schannelCheckRevoke', 'false')
+            repo = git.Repo.clone_from(REPO_URL, os.path.join(os.getcwd(), 'git_staging'))
+            repo.remote().pull()
+        else:
+            repo = git.Repo(GIT_STAGING)
+            repo.remote().pull()
+    except Exception as e:
+        with open('giterrors.txt', 'w') as f:
+            f.write(str(e))
+            raise e
+
+def download_save_source_direct():
+    source = 'https://github.com/AlexFerras/votv_saves/archive/refs/heads/main.zip'
+    filename = 'src.zip'
+    urllib.request.urlretrieve(source, filename)
+    with zipfile.ZipFile(filename) as f:
+        for fi in f.infolist():
+            fi.filename = fi.filename.removeprefix('votv_saves-main/')
+            if fi.filename.endswith('/') : continue
+            
+            if fi.filename:
+                f.extract(fi, GIT_STAGING)
+                
+
+
+    os.remove(filename)
+
 
 def download_save():
     global repo
     #api = DiscordAPI.create()
     #api.download = True
     #api.run_client()
-    set_w_subtext('downloading save')
-    os.makedirs(GIT_STAGING, exist_ok=True)
+    set_w_subtext('error downloading save')
     try:
-        repo = git.Repo.clone_from(REPO_URL, os.path.join(os.getcwd(), 'git_staging'))
+        resolve_repo()
+        raise "why"
     except:
-        repo = git.Repo(GIT_STAGING)
-        repo.remote().pull()
+        download_save_source_direct()
     copy_to_savefolder()
     set_w_subtext('downloaded save')
 
 def upload_save(text:str):
     global repo
-    set_w_subtext("uploading save")
-    os.makedirs(GIT_STAGING, exist_ok=True)
-    try:
-        repo = git.Repo.clone_from(REPO_URL, os.path.join(os.getcwd(), 'git_staging'))
-    except:
-        repo = git.Repo(GIT_STAGING)
-        repo.remote().pull()
-    copy_to_gitstaging(test_bad_folders)
-    files_to_add = []
-    for dirpath,_,filenames in os.walk(GIT_STAGING):
-        f:str
-        for f in filenames:
-            p = os.path.abspath(os.path.join(dirpath, f))
-            if '.git' in p:
-                continue
-            
-            if not file_in_repo(p):
-                files_to_add.append(p)
+    set_w_subtext("error uploading save")
+    resolve_repo()
+    copy_to_gitstaging()
+    files_added = False
+    for t in repo.untracked_files:
+        repo.index.add(t)
+        files_added = True
 
-    if len(files_to_add):
-        repo.index.add(files_to_add)
 
-    changedFiles = [item.a_path for item in repo.index.diff(None)]
-    if len(changedFiles) == 0 and len(files_to_add) == 0:
-        set_w_subtext('no updated files in save')
+
+    changedFiles = repo.head.commit.diff(None)
+    for f in changedFiles:
+        repo.index.add(f.a_path)
+        files_added = True
+
+    if not files_added:
+        set_w_subtext('no changes in savefiles')
         return
-    else:
-        for f in changedFiles:
-            repo.index.add(f)
 
     repo.index.commit(text)
     repo.remote().push()

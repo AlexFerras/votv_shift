@@ -1,0 +1,1 @@
+start updater -f -r
